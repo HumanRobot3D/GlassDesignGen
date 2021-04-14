@@ -1,8 +1,5 @@
 import bpy
 
-
-import bpy
-
 class MY_PT_Panel(bpy.types.Panel):
     bl_idname = "MY_PT_Panel"
     bl_label = "GlassDesignGen"
@@ -11,6 +8,7 @@ class MY_PT_Panel(bpy.types.Panel):
     bl_region_type = "UI"
 
     def draw(self, context):
+        
         layout = self.layout
 
         row = layout.row()

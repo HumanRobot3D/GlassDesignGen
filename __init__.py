@@ -11,8 +11,6 @@
 # You should have received a copy of the GNU General Public License
 # along with this program. If not, see <http://www.gnu.org/licenses/>.
 
-import bpy
-
 bl_info = {
     "name" : "GlassDesignsGen",
     "author" : "Arthur B",
@@ -24,10 +22,13 @@ bl_info = {
     "category" : "Generic"
 }
 
-from . main import MY_OT_GenerateGlassDesign
-from . ui import MY_PT_Panel 
+import bpy
+
+from . main_script import MY_OT_GenerateGlassDesign
+from . ui_panel import MY_PT_Panel 
 
 classes = (
-    MY_OT_GenerateGlassDesign)
+    MY_OT_GenerateGlassDesign, 
+    MY_PT_Panel)
 
 register, unregister = bpy.utils.register_classes_factory(classes)
