@@ -21,6 +21,7 @@ class Options:
     num_points = [4, 8] 
     points_loc_xy = [-5, 5] 
     points_loc_z = [0, 9] 
+    cyclic_frequency = 0.2
     smooth_modif_iterations = 400 
     screw_modif_amount = [0.02, 0.2] #Control the width of the curves
     solidify_modif_thickness = [0.03, 0.2] 
@@ -32,7 +33,7 @@ class Options:
     random_remesh = True
     random_remesh_frequency = [0, 3] #Always 0 as minimum. TODO rework to be a value between 0 and 1 instead of a list
     remesh_modif_voxel_size = [0.06, 0.15]
-
+    
     #Glass materials
     glass_roughness = [0.01, 0.3]
 
@@ -45,28 +46,35 @@ class Options:
     random_rot_intensity = [1, 2] #Multiplier for the rotation amount based on empty inital rotation.
 
     #Sphere Solo
-    sphere_presence = False
-    sphere_frequency = .2 #How often the sphere solo will be added
+    sphere_presence = True
+    sphere_frequency = .1 #How often the sphere solo will be added
     sphere_subdiv = [2, 5]
-    sphere_size = [1, 5]
-    cyclic_frequency = 0.2
-
+    sphere_size = [.5, 3] #This is a multiplier for the bmesh creation (so don't expect your usual blender scale values)
 
     #Spheres Array
-    spheres_presence = False
+    spheres_presence = True
     spheres_frequency = .1 #How often the spheres array will be added
     spheres_subdiv = [1, 4]
-    spheres_size = [.1, .6]
+    spheres_size = [.1, .6] #This is a multiplier for the bmesh creation (so don't expect your usual blender scale values)
+
+    #Point Light
+    light_zloc = [3,6]
+    light_intensity = 300
 
     min_light_zloc = 3
     max_light_zloc = 8
 
     center_cam = True
 
+#Scene Settings
 def sceneSettings():
     scene = bpy.context.scene
 
+    #TODO This kinds of thing should be embeded in the UI
     scene.frame_end = Options.end_frame
+    scene.render.engine = 'CYCLES'
+    scene.render.use_motion_blur = True
+
 
 #Delete all the data (objects, materials, meshes, images, etc)
 def purgeAllData():
@@ -136,6 +144,70 @@ def createEnvironment():
     env_col.objects.link(cam_obj) 
     cam_obj.location[1] = -16.24
     cam_obj.location[2] = 7 #is overwritten when animating camera but it's just nice to not leave it on the ground when debugging
+    cam_obj.rotation_euler[0] = math.radians(90) #is overwritten when animating camera but it's just nice to not leave it on the ground when debugging
+    bpy.ops.view3d.view_camera()
+
+    #Create a World
+    hdri_path = r'D:\GOOGLE_DRIVE\Ressources\Textures\HDRI\Studios\HDRI_STUDIO_vol2_052.png'
+
+    world = bpy.data.worlds.new('World')
+    scene.world = world
+    world.use_nodes = True
+
+    background = world.node_tree.nodes['Background']
+    background.inputs['Strength'].default_value = 1.5
+    background.location[0] = -300
+
+    hdri_img = bpy.data.images.load(hdri_path)
+    hdri_img.colorspace_settings.name = 'Non-Color'
+
+    env_node = world.node_tree.nodes.new('ShaderNodeTexEnvironment')
+    env_node.image = hdri_img
+    env_node.location[0] = -700
+    env_node.location[1] = 300
+
+    world.node_tree.links.new(background.inputs['Color'], env_node.outputs['Color'])
+
+    tex_coord = world.node_tree.nodes.new('ShaderNodeTexCoord')
+    tex_coord.location[0] = -700
+    tex_coord.location[1] = 0
+
+    mapping = world.node_tree.nodes.new('ShaderNodeMapping')
+    mapping.location[0] = -500
+    mapping.location[1] = 0
+    mapping.inputs[2].default_value[2] = -1.5708
+
+    gradient = world.node_tree.nodes.new('ShaderNodeTexGradient')
+    gradient.gradient_type = 'LINEAR'
+    gradient.location[0] = -300
+    gradient.location[1] = 0
+
+    ramp = world.node_tree.nodes.new('ShaderNodeValToRGB')
+    ramp.color_ramp.elements[0].color = (0.00825129, 0.00825129, 0.00825129, 1)
+    ramp.color_ramp.elements[1].color = (0.0217889, 0.0217889, 0.0217889, 1)
+    ramp.location[0] = -100
+    ramp.location[1] = 0
+
+    world.node_tree.links.new(mapping.inputs['Vector'], tex_coord.outputs['Window'])
+    world.node_tree.links.new(gradient.inputs['Vector'], mapping.outputs['Vector'])
+    world.node_tree.links.new(ramp.inputs['Fac'], gradient.outputs['Color'])
+
+    light_path = world.node_tree.nodes.new('ShaderNodeLightPath')
+    light_path.location[0] = -700
+    light_path.location[1] = 700
+
+    mix = world.node_tree.nodes.new('ShaderNodeMixShader')
+    mix.location[0] = 100
+    mix.location[1] = 300
+
+    world_output = world.node_tree.nodes['World Output']
+
+    world.node_tree.links.new(mix.inputs['Fac'], light_path.outputs['Is Camera Ray'])
+    world.node_tree.links.new(mix.inputs[1], background.outputs['Background'])
+    world.node_tree.links.new(mix.inputs[2], ramp.outputs['Color'])
+    world.node_tree.links.new(world_output.inputs['Surface'], mix.outputs['Shader'])
+
+    return cam_obj
 
 #Create a collection and make it active. Return the collection.
 def createCollection(name):
@@ -287,7 +359,7 @@ def addSphereSolo(col):
     bmesh.ops.create_icosphere(
         bm, 
         subdivisions = sphere_subdiv, 
-        diameter = random.randint(Options.sphere_size[0], Options.sphere_size[1]))
+        diameter = random.uniform(Options.sphere_size[0], Options.sphere_size[1]))
     if sphere_subdiv >= 4:
         for f in bm.faces:
             f.smooth = True
@@ -302,81 +374,99 @@ def addSphereSolo(col):
 
     return sphere_obj
 
-'''
+#Add spheres in an array.
 def addSpheresArray(col, empty):
 
     sphere_mesh = bpy.data.meshes.new("Spheres array mesh")
 
-    sphere_subdiv = random.randint(Options.sphere_subdiv[0], Options.sphere_subdiv[1])
+    spheres_subdiv = random.randint(Options.sphere_subdiv[0], Options.sphere_subdiv[1])
 
     bm = bmesh.new()
     bmesh.ops.create_icosphere(
         bm, 
         subdivisions = spheres_subdiv, 
-        diameter = random.randint(Options.spheres_size[0], Options.spheres_size[1]))
-    if sphere_subdiv >= 3:
+        diameter = random.uniform(Options.spheres_size[0], Options.spheres_size[1]))
+    if spheres_subdiv >= 3:
         for f in bm.faces:
             f.smooth = True
     bm.to_mesh(sphere_mesh) 
     bm.free() #prevent further access
 
     spheres_obj = bpy.data.objects.new("Sphere array", sphere_mesh)
-    col.objects.link(sphere_obj)
+    col.objects.link(spheres_obj)
 
+    #TODO find a non bpy.ops way to do this
+    '''
     if random.randint(0,4) > 0:
         spheres_obj.scale[2] = 2
-
+        bpy.context.view_layer.objects.active = spheres_obj
+        bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
+    '''
+        
     #Array Modifier
-    array_modif = curve_obj.modifiers.new('Array', "ARRAY")
+    array_modif = spheres_obj.modifiers.new('Array', "ARRAY")
     array_modif.use_relative_offset = False
     array_modif.use_object_offset = True
     array_modif.offset_object = empty
-    array_modif.count = 360/math.radians(empty.rotation_euler[2])
+    array_modif.count = 360/math.degrees(empty.rotation_euler[2]) + 1
 
     return spheres_obj
 
+#Add a point light in the middle of the sculpture
+def addPointLight(col):
+    scene = bpy.context.scene
+
+    light_data = bpy.data.lights.new(name = "Point light data", type = "POINT")
+    light_data.energy = Options.light_intensity
+    light_data.color = (random.uniform(.5,1), random.uniform(.5,1), random.uniform(.5,1))
+    light_obj = bpy.data.objects.new("Point Light", light_data)
+    col.objects.link(light_obj)
+
+    light_obj.location[2] = random.uniform(Options.light_zloc[0], Options.light_zloc[1])
+    light_obj.keyframe_insert(data_path="location", frame = scene.frame_end)
+    light_obj.location[2] = random.uniform(Options.light_zloc[0], Options.light_zloc[1])
+    light_obj.keyframe_insert(data_path="location", frame = 1)
+
+#Center camera on sculpture
 def alignCamera(col, camera):
-    for obj in col:
-        if obj.type == 'CURVE' or obj.type == 'MESH':
+    scene = bpy.context.scene
+    for current_frame in range(scene.frame_end):
+        if current_frame%20 == 0 or current_frame == 1:
 
+            #change frame
+            scene.frame_set(current_frame)
 
-            #Figure out camera z locations keyframes to center object
-                current_frame = 1
-                while current_frame <= scene.frame_end:
+            max_z_obj = []
+            min_z_obj = []
+
+            for obj in col.objects:
+                if obj.type == "CURVE" or obj.type == 'MESH':
+
+                    z_values = []
+
+                    for point in range(0,7):
+                        z_values.append(obj.bound_box[point][2] + obj.location[2])
+
+                    max_z_obj.append(max(z_values))
+                    min_z_obj.append(min(z_values))
+
+            max_z_frame = max(max_z_obj)
+            min_z_frame = min(min_z_obj)
+
+            camera.location[2] = min_z_frame + (max_z_frame - min_z_frame)/2
+            camera.keyframe_insert(data_path="location", frame = scene.frame_current)
                     
-                    if current_frame%20 == 0 or current_frame == 1:
-                    
-                        #change frame
-                        bpy.context.scene.frame_set(current_frame)
-                        
-                        max_z_obj = []
-                        min_z_obj = []
-                        
-                        for obj in bpy.data.objects:
-                            #Get size of object based on bounding box points coordinates
-                            if obj.type == "CURVE" or 'Icosphere' in obj.name:
-                                
-                                point = 0
-                                z_values = []
-                                while point < 8:
-                            
-                                    z_values.append(obj.bound_box[point][2] + obj.location[2])
-                                    point +=1
+            print(str(scene.frame_current), str(max_z_frame), str(min_z_frame))
 
-                                max_z_obj.append(max(z_values))
-                                min_z_obj.append(min(z_values))
-                
-                        max_z_frame = max(max_z_obj)
-                        min_z_frame = min(min_z_obj)
-                        
-                        bpy.data.objects['Cam'].location[2] = min_z_frame + (max_z_frame - min_z_frame)/2
-                        bpy.data.objects['Cam'].keyframe_insert(data_path="location", frame = scene.frame_current)
-                        
-                        print(str(scene.frame_current), str(max_z_frame), str(min_z_frame))
+def compositing():
+    scene = bpy.context.scene
 
-                current_frame +=1
-'''
+    scene.use_nodes = True
 
+    render_layers = scene.node_tree.nodes['Render Layers']
+    render_layers.location[0] = -800
+
+    scene.node_tree.nodes.new('ShaderNodeValToRGB')
 class MY_OT_GenerateGlassDesign(bpy.types.Operator):
     bl_idname = "view3d.generateglassdesign"
     bl_label = "Generate glass design"
@@ -400,7 +490,7 @@ class MY_OT_GenerateGlassDesign(bpy.types.Operator):
         for count in range(self.render_number):
 
             purgeAllData()
-            createEnvironment()
+            camera = createEnvironment()
             col = createCollection("Procedural_Model")
 
             #This loop based on the number of curves (randomized)
@@ -420,35 +510,27 @@ class MY_OT_GenerateGlassDesign(bpy.types.Operator):
                 if Options.sphere_presence == True and random.uniform(0, 1) <= Options.sphere_frequency:
                     sphere_solo = addSphereSolo(col)
                     randomMovementZ(obj_list = [sphere_solo])
-
-            #TODO Finish this and addSpheresArray
-            '''        
+                    applyGlassMat(sphere_solo)
+     
             for count3 in range(5):
-                if random.uniform(0, 1) <= Options.spheres_frequency:
+                if Options.spheres_presence == True and random.uniform(0, 1) <= Options.spheres_frequency:
                     empty_spheres = addRotatedEmpty(col)
                     spheres_array = addSpheresArray(col, empty_spheres)
                     randomMovementZ(obj_list = [spheres_array])
-                    randomRotation(obj_list = [empty_spheres, spheres_array], empty_spheres)
-            '''
-
-            #TODO Finish this as well!
-            '''    
-            bpy.ops.object.light_add(type='POINT')
-            light = bpy.context.active_object
-            light.data.energy = 300
-            bpy.context.object.data.color = (random.uniform(.5,1), random.uniform(.5,1), random.uniform(.5,1))
-            light.location[2] = random.uniform(min_light_zloc, max_light_zloc)
-            light.keyframe_insert(data_path="location", frame = scene.frame_end)
-            light.location[2] = random.uniform(min_light_zloc, max_light_zloc)
-            light.keyframe_insert(data_path="location", frame = 1)
-            '''
-            
-            '''
+                    randomRotation(obj_list = [empty_spheres, spheres_array], leading_obj = empty_spheres)
+                    applyGlassMat(spheres_array)
+  
+            addPointLight(col)
+         
             alignCamera(col, camera)
-            
-            scene.render.filepath = render_path.replace('\\','/') + '/' + str(t) + '_'
-            bpy.ops.render.render(animation=True)
+
+            #TODO
             '''
+            compositing()
+            '''
+            
+            #scene.render.filepath = render_path.replace('\\','/') + '/' + str(t) + '_'
+            #bpy.ops.render.render(animation=True)
 
         self.report({'INFO'}, 'Done')
         return {'FINISHED'}
